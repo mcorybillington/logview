@@ -182,15 +182,54 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer;margin-to
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px}
+
+/* ── Mobile ─────────────────────────────────────────────── */
+.menu-btn{display:none;background:none;border:none;color:var(--text2);font-size:20px;cursor:pointer;padding:4px 8px;line-height:1;flex-shrink:0}
+#sidebarBackdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:299;-webkit-tap-highlight-color:transparent}
+#sidebarBackdrop.visible{display:block}
+
+@media(max-width:768px){
+  :root{--sb:288px}
+  .menu-btn{display:flex;align-items:center}
+  .sidebar{position:fixed;left:0;top:0;bottom:0;z-index:300;
+    transform:translateX(-100%);transition:transform .24s ease;
+    box-shadow:none}
+  .sidebar.open{transform:translateX(0);box-shadow:6px 0 24px rgba(0,0,0,.5)}
+  /* Prevent iOS font-size zoom on focus */
+  select,input[type=text],input[type=number]{font-size:16px}
+  /* Larger touch targets */
+  .btn{min-height:40px;padding:7px 12px}
+  .btn.sm{min-height:34px;padding:5px 10px}
+  .y-item{padding:6px 6px;min-height:34px}
+  .sec-head{padding:10px 16px}
+  .toggle-row{margin-top:10px}
+  .toggle{width:36px;height:20px}
+  .toggle-thumb{width:14px;height:14px}
+  .toggle input:checked~.toggle-track .toggle-thumb{transform:translateX(16px)}
+  /* Chart header reflow */
+  .chart-header{flex-wrap:wrap;padding:8px 10px;gap:6px}
+  .chart-title{font-size:11px;min-width:0}
+  .chart-meta{display:none}
+  /* Stats bar compact */
+  .stats-col{padding:5px 10px}
+  /* Stacked panels min height */
+  .stack-panel{min-height:140px}
+  /* Help tooltip opens right on mobile to avoid sidebar clip */
+  .help-tip .help-bubble{left:0;bottom:auto;top:calc(100% + 6px)}
+}
+@media(max-width:480px){
+  .mode-btn{padding:3px 7px;font-size:10px}
+}
 </style>
 </head>
 <body>
 <div class="app">
 
 <!-- ═══ SIDEBAR ═══ -->
-<aside class="sidebar">
+<div id="sidebarBackdrop" onclick="closeSidebar()"></div>
+<aside class="sidebar" id="sidebar">
   <div class="sb-head">
-    <div><h1>LogView.io</h1><p>ECU log analysis</p></div>
+    <div><h1>LogView.io</h1><p>ECU log analysis. Everything runs directly in your browser. No data is ever uploaded to a server.</p></div>
     <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle theme">☀</button>
   </div>
 
@@ -466,6 +505,7 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer;margin-to
 <!-- ═══ MAIN ═══ -->
 <main class="main">
   <div class="chart-header">
+    <button class="menu-btn" onclick="toggleSidebar()" title="Menu">☰</button>
     <div class="chart-title" id="chartTitle">No data loaded</div>
     <div class="mode-switch">
       <button class="mode-btn active" id="modeCombined" onclick="setMode('combined')">Combined</button>
@@ -1417,26 +1457,40 @@ function plotStacked(cfg) {
 /* ═══════════════════════════════════════════════════════
    HOVER SYNC
 ═══════════════════════════════════════════════════════ */
+function handleChartPointer(canvas, clientX, clientY) {
+  const chart = state.charts.find(c => c.canvas === canvas);
+  if (!chart) return false;
+  const rect = canvas.getBoundingClientRect();
+  const mx = clientX - rect.left;
+  const {left, right} = chart.chartArea || {};
+  if (left == null || mx < left || mx > right) { clearHover(); return false; }
+  state.hoverX = chart.scales.x.getValueForPixel(mx);
+  state.charts.forEach(c => c.draw());
+  showTooltip({clientX, clientY});
+  return true;
+}
+
 function attachHoverSync(canvases) {
   canvases.forEach(canvas => {
-    // Remove any previous handlers stored on the element to prevent accumulation
-    if (canvas._hoverMove)  canvas.removeEventListener('mousemove',  canvas._hoverMove);
-    if (canvas._hoverLeave) canvas.removeEventListener('mouseleave', canvas._hoverLeave);
+    // Remove previous handlers to prevent accumulation
+    if (canvas._hoverMove)   canvas.removeEventListener('mousemove',   canvas._hoverMove);
+    if (canvas._hoverLeave)  canvas.removeEventListener('mouseleave',  canvas._hoverLeave);
+    if (canvas._touchMove)   canvas.removeEventListener('touchmove',   canvas._touchMove);
+    if (canvas._touchEnd)    canvas.removeEventListener('touchend',    canvas._touchEnd);
 
-    canvas._hoverMove = e => {
-      const chart = state.charts.find(c => c.canvas === canvas);
-      if (!chart) return;
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const {left, right} = chart.chartArea || {};
-      if (left == null || mx < left || mx > right) { clearHover(); return; }
-      state.hoverX = chart.scales.x.getValueForPixel(mx);
-      state.charts.forEach(c => c.draw());
-      showTooltip(e);
-    };
+    canvas._hoverMove  = e => handleChartPointer(canvas, e.clientX, e.clientY);
     canvas._hoverLeave = clearHover;
+    canvas._touchMove  = e => {
+      if (!e.touches[0]) return;
+      const handled = handleChartPointer(canvas, e.touches[0].clientX, e.touches[0].clientY);
+      if (handled) e.preventDefault(); // block page scroll only while on chart data area
+    };
+    canvas._touchEnd = clearHover;
+
     canvas.addEventListener('mousemove',  canvas._hoverMove);
     canvas.addEventListener('mouseleave', canvas._hoverLeave);
+    canvas.addEventListener('touchmove',  canvas._touchMove, {passive: false});
+    canvas.addEventListener('touchend',   canvas._touchEnd);
   });
 }
 
@@ -1767,6 +1821,25 @@ function esc(s) {
 /* ═══════════════════════════════════════════════════════
    RESIZE
 ═══════════════════════════════════════════════════════ */
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  const bd = document.getElementById('sidebarBackdrop');
+  const open = sb.classList.toggle('open');
+  bd.classList.toggle('visible', open);
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarBackdrop').classList.remove('visible');
+}
+// Close sidebar when user taps Plot or Clear on mobile
+['plot','clearAll'].forEach(fn => {
+  const orig = window[fn];
+  if (orig) window[fn] = function(...a) {
+    if (window.innerWidth <= 768) closeSidebar();
+    return orig.apply(this, a);
+  };
+});
+
 /* Force known defaults on every load regardless of browser form restoration */
 window.addEventListener('load', () => {
   document.getElementById('filterEnabled').checked = false;
